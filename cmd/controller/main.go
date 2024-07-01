@@ -68,6 +68,7 @@ func main() {
 			op.AMIProvider,
 			op.LaunchTemplateProvider,
 			op.InstanceTypesProvider,
+			op.CapacityReservationProvider,
 		)...).
 		WithWebhooks(ctx, webhooks.NewWebhooks()...).
 		Start(ctx)

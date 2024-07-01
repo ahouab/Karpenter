@@ -58,43 +58,58 @@ type Provider interface {
 	DeleteAll(context.Context, *v1beta1.EC2NodeClass) error
 	InvalidateCache(context.Context, string, string)
 	ResolveClusterCIDR(context.Context) error
+	GetCapacityReservationID(launchTemplateName string) *string
 }
 
 type LaunchTemplate struct {
-	Name          string
-	InstanceTypes []*cloudprovider.InstanceType
-	ImageID       string
+	Name                  string
+	InstanceTypes         []*cloudprovider.InstanceType
+	ImageID               string
+	CapacityReservationID *string
 }
 
 type DefaultProvider struct {
 	sync.Mutex
-	ec2api                ec2iface.EC2API
-	eksapi                eksiface.EKSAPI
-	amiFamily             *amifamily.Resolver
-	securityGroupProvider securitygroup.Provider
-	subnetProvider        subnet.Provider
-	cache                 *cache.Cache
-	cm                    *pretty.ChangeMonitor
-	KubeDNSIP             net.IP
-	CABundle              *string
-	ClusterEndpoint       string
-	ClusterCIDR           atomic.Pointer[string]
+	ec2api                 ec2iface.EC2API
+	eksapi                 eksiface.EKSAPI
+	amiFamily              *amifamily.Resolver
+	securityGroupProvider  securitygroup.Provider
+	subnetProvider         subnet.Provider
+	cache                  *cache.Cache
+	capacityReservationIDs *cache.Cache
+	cm                     *pretty.ChangeMonitor
+	KubeDNSIP              net.IP
+	CABundle               *string
+	ClusterEndpoint        string
+	ClusterCIDR            atomic.Pointer[string]
 }
 
-func NewDefaultProvider(ctx context.Context, cache *cache.Cache, ec2api ec2iface.EC2API, eksapi eksiface.EKSAPI, amiFamily *amifamily.Resolver,
-	securityGroupProvider securitygroup.Provider, subnetProvider subnet.Provider,
-	caBundle *string, startAsync <-chan struct{}, kubeDNSIP net.IP, clusterEndpoint string) *DefaultProvider {
+func NewDefaultProvider(
+	ctx context.Context,
+	cache *cache.Cache,
+	capacityReservationIDs *cache.Cache,
+	ec2api ec2iface.EC2API,
+	eksapi eksiface.EKSAPI,
+	amiFamily *amifamily.Resolver,
+	securityGroupProvider securitygroup.Provider,
+	subnetProvider subnet.Provider,
+	caBundle *string,
+	startAsync <-chan struct{},
+	kubeDNSIP net.IP,
+	clusterEndpoint string,
+) *DefaultProvider {
 	l := &DefaultProvider{
-		ec2api:                ec2api,
-		eksapi:                eksapi,
-		amiFamily:             amiFamily,
-		securityGroupProvider: securityGroupProvider,
-		subnetProvider:        subnetProvider,
-		cache:                 cache,
-		CABundle:              caBundle,
-		cm:                    pretty.NewChangeMonitor(),
-		KubeDNSIP:             kubeDNSIP,
-		ClusterEndpoint:       clusterEndpoint,
+		ec2api:                 ec2api,
+		eksapi:                 eksapi,
+		amiFamily:              amiFamily,
+		securityGroupProvider:  securityGroupProvider,
+		subnetProvider:         subnetProvider,
+		cache:                  cache,
+		capacityReservationIDs: capacityReservationIDs,
+		CABundle:               caBundle,
+		cm:                     pretty.NewChangeMonitor(),
+		KubeDNSIP:              kubeDNSIP,
+		ClusterEndpoint:        clusterEndpoint,
 	}
 	l.cache.OnEvicted(l.cachedEvictedFunc(ctx))
 	go func() {
@@ -119,6 +134,8 @@ func (p *DefaultProvider) EnsureAll(ctx context.Context, nodeClass *v1beta1.EC2N
 	if err != nil {
 		return nil, err
 	}
+
+	log.FromContext(ctx).WithValues("instanceTypes", instanceTypes).V(0).Info("Ensure All")
 	resolvedLaunchTemplates, err := p.amiFamily.Resolve(nodeClass, nodeClaim, instanceTypes, capacityType, options)
 	if err != nil {
 		return nil, err
@@ -130,7 +147,15 @@ func (p *DefaultProvider) EnsureAll(ctx context.Context, nodeClass *v1beta1.EC2N
 		if err != nil {
 			return nil, err
 		}
-		launchTemplates = append(launchTemplates, &LaunchTemplate{Name: *ec2LaunchTemplate.LaunchTemplateName, InstanceTypes: resolvedLaunchTemplate.InstanceTypes, ImageID: resolvedLaunchTemplate.AMIID})
+		launchTemplates = append(
+			launchTemplates,
+			&LaunchTemplate{
+				Name:                  *ec2LaunchTemplate.LaunchTemplateName,
+				InstanceTypes:         resolvedLaunchTemplate.InstanceTypes,
+				ImageID:               resolvedLaunchTemplate.AMIID,
+				CapacityReservationID: resolvedLaunchTemplate.CapacityReservationID,
+			},
+		)
 	}
 	return launchTemplates, nil
 }
@@ -186,6 +211,7 @@ func (p *DefaultProvider) createAMIOptions(ctx context.Context, nodeClass *v1bet
 		KubeDNSIP:                p.KubeDNSIP,
 		AssociatePublicIPAddress: nodeClass.Spec.AssociatePublicIPAddress,
 		NodeClassName:            nodeClass.Name,
+		// tvonhacht: might wanna add CapacityReservations here
 	}, nil
 }
 
@@ -235,6 +261,7 @@ func (p *DefaultProvider) createLaunchTemplate(ctx context.Context, options *ami
 		launchTemplateDataTags = append(launchTemplateDataTags, &ec2.LaunchTemplateTagSpecificationRequest{ResourceType: aws.String(ec2.ResourceTypeSpotInstancesRequest), Tags: utils.MergeTags(options.Tags)})
 	}
 	networkInterfaces := p.generateNetworkInterfaces(options)
+	capacityReservationSpecification := p.generateCapacityReservationSpecification(options)
 	output, err := p.ec2api.CreateLaunchTemplateWithContext(ctx, &ec2.CreateLaunchTemplateInput{
 		LaunchTemplateName: aws.String(LaunchTemplateName(options)),
 		LaunchTemplateData: &ec2.RequestLaunchTemplateData{
@@ -255,8 +282,9 @@ func (p *DefaultProvider) createLaunchTemplate(ctx context.Context, options *ami
 				HttpPutResponseHopLimit: options.MetadataOptions.HTTPPutResponseHopLimit,
 				HttpTokens:              options.MetadataOptions.HTTPTokens,
 			},
-			NetworkInterfaces: networkInterfaces,
-			TagSpecifications: launchTemplateDataTags,
+			NetworkInterfaces:                networkInterfaces,
+			TagSpecifications:                launchTemplateDataTags,
+			CapacityReservationSpecification: capacityReservationSpecification,
 		},
 		TagSpecifications: []*ec2.TagSpecification{
 			{
@@ -269,6 +297,7 @@ func (p *DefaultProvider) createLaunchTemplate(ctx context.Context, options *ami
 		return nil, err
 	}
 	log.FromContext(ctx).WithValues("id", aws.StringValue(output.LaunchTemplate.LaunchTemplateId)).V(1).Info("created launch template")
+	p.capacityReservationIDs.SetDefault(lo.FromPtr(output.LaunchTemplate.LaunchTemplateName), lo.FromPtr(options.CapacityReservationID))
 	return output.LaunchTemplate, nil
 }
 
@@ -299,6 +328,18 @@ func (p *DefaultProvider) generateNetworkInterfaces(options *amifamily.LaunchTem
 		}
 	}
 	return nil
+}
+
+func (p *DefaultProvider) generateCapacityReservationSpecification(options *amifamily.LaunchTemplate) *ec2.LaunchTemplateCapacityReservationSpecificationRequest {
+	if options.CapacityReservationID == nil {
+		return nil
+	}
+
+	return &ec2.LaunchTemplateCapacityReservationSpecificationRequest{
+		CapacityReservationTarget: &ec2.CapacityReservationTarget{
+			CapacityReservationId: options.CapacityReservationID,
+		},
+	}
 }
 
 func (p *DefaultProvider) blockDeviceMappings(blockDeviceMappings []*v1beta1.BlockDeviceMapping) []*ec2.LaunchTemplateBlockDeviceMappingRequest {
@@ -437,4 +478,13 @@ func (p *DefaultProvider) ResolveClusterCIDR(ctx context.Context) error {
 		return nil
 	}
 	return fmt.Errorf("no CIDR found in DescribeCluster response")
+}
+
+func (p *DefaultProvider) GetCapacityReservationID(launchTemplateName string) *string {
+	capacityReservationID, ok := p.capacityReservationIDs.Get(launchTemplateName)
+	if !ok {
+		return nil
+	}
+
+	return lo.ToPtr(capacityReservationID.(string))
 }

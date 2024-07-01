@@ -22,6 +22,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/awslabs/operatorpkg/status"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -77,6 +78,7 @@ func New(instanceTypeProvider instancetype.Provider, instanceProvider instance.P
 
 // Create a NodeClaim given the constraints.
 func (c *CloudProvider) Create(ctx context.Context, nodeClaim *corev1beta1.NodeClaim) (*corev1beta1.NodeClaim, error) {
+	log.FromContext(ctx).WithValues("nodeClaim", nodeClaim).V(0).Info("Create nodeClaim")
 	nodeClass, err := c.resolveNodeClassFromNodeClaim(ctx, nodeClaim)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -98,11 +100,13 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *corev1beta1.NodeC
 	}
 	instance, err := c.instanceProvider.Create(ctx, nodeClass, nodeClaim, instanceTypes)
 	if err != nil {
+		c.updateUnavailableCapacityReservation(ctx, nodeClass, err)
 		return nil, fmt.Errorf("creating instance, %w", err)
 	}
 	instanceType, _ := lo.Find(instanceTypes, func(i *cloudprovider.InstanceType) bool {
 		return i.Name == instance.Type
 	})
+
 	nc := c.instanceToNodeClaim(instance, instanceType, nodeClass)
 	nc.Annotations = lo.Assign(nodeClass.Annotations, map[string]string{
 		v1beta1.AnnotationEC2NodeClassHash:        nodeClass.Hash(),
@@ -348,6 +352,11 @@ func (c *CloudProvider) instanceToNodeClaim(i *instance.Instance, instanceType *
 	if v, ok := i.Tags[corev1beta1.ManagedByAnnotationKey]; ok {
 		annotations[corev1beta1.ManagedByAnnotationKey] = v
 	}
+
+	if i.CapacityReservationID != nil {
+		labels[v1beta1.LabelCapactiyReservationID] = *i.CapacityReservationID
+	}
+
 	nodeClaim.Labels = labels
 	nodeClaim.Annotations = annotations
 	nodeClaim.CreationTimestamp = metav1.Time{Time: i.LaunchTime}
@@ -357,6 +366,7 @@ func (c *CloudProvider) instanceToNodeClaim(i *instance.Instance, instanceType *
 	}
 	nodeClaim.Status.ProviderID = fmt.Sprintf("aws:///%s/%s", i.Zone, i.ID)
 	nodeClaim.Status.ImageID = i.ImageID
+
 	return nodeClaim
 }
 
@@ -366,4 +376,30 @@ func newTerminatingNodeClassError(name string) *errors.StatusError {
 	err := errors.NewNotFound(qualifiedResource, name)
 	err.ErrStatus.Message = fmt.Sprintf("%s %q is terminating, treating as not found", qualifiedResource.String(), name)
 	return err
+}
+
+func (c *CloudProvider) updateUnavailableCapacityReservation(ctx context.Context, nodeClass *v1beta1.EC2NodeClass, err error) {
+	// 1. GetInstanceTypes() relies on the NodeClass status capacity reservation information
+	// 2. A failure to launch a capacity reservation causes us to update the NodeClass status avaialble count for that CR ID to 0
+	//        CreateFleet returns that it can't fulfill the request
+	// 3. Launching into a capacity reservation pool causes us to decrement the available count on the NodeClass status for that CR ID
+	// 4. When there is an update on the NodeClass capacity reservation status, that should invalidate the current GetInstanceTypes() cache for that NodePool/NodeClass
+	// 5. The Capacity reservation provider reconciliation polls to update the capacity reservation status
+
+	if _, ok := err.(*cloudprovider.InsufficientCapacityError); !ok {
+		return
+	}
+
+	stored := nodeClass.DeepCopy()
+
+	for i, capacityReservation := range nodeClass.Status.CapacityReservations {
+		capacityReservation.AvailableInstanceCount = 0
+		nodeClass.Status.CapacityReservations[i] = capacityReservation
+	}
+
+	if !equality.Semantic.DeepEqual(stored, nodeClass) {
+		if err := c.kubeClient.Patch(ctx, nodeClass, client.MergeFrom(stored)); err != nil {
+			log.FromContext(ctx).Error(err, fmt.Sprintf("failed to update unavailable capacity reservations for node class %s", nodeClass.Name))
+		}
+	}
 }

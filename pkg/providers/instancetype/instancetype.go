@@ -164,10 +164,27 @@ func (p *DefaultProvider) List(ctx context.Context, kc *corev1beta1.KubeletConfi
 		// Any changes to the values passed into the NewInstanceType method will require making updates to the cache key
 		// so that Karpenter is able to cache the set of InstanceTypes based on values that alter the set of instance types
 		// !!! Important !!!
-		return NewInstanceType(ctx, i, p.region,
-			nodeClass.Spec.BlockDeviceMappings, nodeClass.Spec.InstanceStorePolicy,
-			kc.MaxPods, kc.PodsPerCore, kc.KubeReserved, kc.SystemReserved, kc.EvictionHard, kc.EvictionSoft,
-			amiFamily, p.createOfferings(ctx, i, allZones, p.instanceTypeOfferings[aws.StringValue(i.InstanceType)], nodeClass.Status.Subnets),
+		return NewInstanceType(
+			ctx,
+			i,
+			p.region,
+			nodeClass.Spec.BlockDeviceMappings,
+			nodeClass.Spec.InstanceStorePolicy,
+			kc.MaxPods,
+			kc.PodsPerCore,
+			kc.KubeReserved,
+			kc.SystemReserved,
+			kc.EvictionHard,
+			kc.EvictionSoft,
+			amiFamily,
+			p.createOfferings(
+				ctx,
+				i,
+				allZones,
+				p.instanceTypeOfferings[aws.StringValue(i.InstanceType)],
+				nodeClass.Status.Subnets,
+				nodeClass.Status.CapacityReservations,
+			),
 		)
 	})
 	p.instanceTypesCache.SetDefault(key, result)
@@ -261,7 +278,14 @@ func (p *DefaultProvider) UpdateInstanceTypeOfferings(ctx context.Context) error
 // offering, you can do the following thanks to this invariant:
 //
 //	offering.Requirements.Get(v1.TopologyLabelZone).Any()
-func (p *DefaultProvider) createOfferings(ctx context.Context, instanceType *ec2.InstanceTypeInfo, zones, instanceTypeZones sets.Set[string], subnets []v1beta1.Subnet) []cloudprovider.Offering {
+func (p *DefaultProvider) createOfferings(
+	ctx context.Context,
+	instanceType *ec2.InstanceTypeInfo,
+	zones,
+	instanceTypeZones sets.Set[string],
+	subnets []v1beta1.Subnet,
+	capacityReservations []v1beta1.CapacityReservation,
+) []cloudprovider.Offering {
 	var offerings []cloudprovider.Offering
 	for zone := range zones {
 		// while usage classes should be a distinct set, there's no guarantee of that
@@ -275,7 +299,7 @@ func (p *DefaultProvider) createOfferings(ctx context.Context, instanceType *ec2
 				price, ok = p.pricingProvider.SpotPrice(*instanceType.InstanceType, zone)
 			case ec2.UsageClassTypeOnDemand:
 				price, ok = p.pricingProvider.OnDemandPrice(*instanceType.InstanceType)
-			case "capacity-block":
+			case ec2.UsageClassTypeCapacityBlock:
 				// ignore since karpenter doesn't support it yet, but do not log an unknown capacity type error
 				continue
 			default:
@@ -311,6 +335,52 @@ func (p *DefaultProvider) createOfferings(ctx context.Context, instanceType *ec2
 			}).Set(price)
 		}
 	}
+
+	log.FromContext(ctx).WithValues("instanceType", *instanceType.InstanceType, "capacityReservations", capacityReservations).V(0).Info("capacity reservations for instanceType")
+	for _, capacityReservation := range capacityReservations {
+		log.FromContext(ctx).WithValues("instanceType", *instanceType.InstanceType, "capacityReservation", capacityReservation.ID).V(0).Info("capacity reservation for instanceType")
+		if capacityReservation.InstanceType != *instanceType.InstanceType {
+			log.FromContext(ctx).WithValues("instanceType", *instanceType.InstanceType, "capacityReservation", capacityReservation.ID).V(0).Info("capacity reservation not applicatble for instanceType")
+			continue
+		}
+		log.FromContext(ctx).WithValues("instanceType", *instanceType.InstanceType, "capacityReservation", capacityReservation.ID).V(0).Info("capacity reservation applicatble for instanceType")
+		price := 0.0
+		isAvailable := capacityReservation.AvailableInstanceCount > 0
+		zone := capacityReservation.AvailabilityZone
+		capacityType := ec2.UsageClassTypeOnDemand
+
+		subnet, hasSubnet := lo.Find(subnets, func(s v1beta1.Subnet) bool {
+			return s.Zone == zone
+		})
+		available := isAvailable && instanceTypeZones.Has(zone) && hasSubnet
+		offering := cloudprovider.Offering{
+			Requirements: scheduling.NewRequirements(
+				scheduling.NewRequirement(corev1beta1.CapacityTypeLabelKey, v1.NodeSelectorOpIn, capacityType),
+				scheduling.NewRequirement(v1.LabelTopologyZone, v1.NodeSelectorOpIn, zone),
+			),
+			Price:     price,
+			Available: available,
+		}
+		if subnet.ZoneID != "" {
+			offering.Requirements.Add(scheduling.NewRequirement(v1beta1.LabelTopologyZoneID, v1.NodeSelectorOpIn, subnet.ZoneID))
+		}
+		// TODO: tvonhacht
+		offering.Requirements.Add(scheduling.NewRequirement(v1beta1.LabelCapactiyReservationID, v1.NodeSelectorOpIn, capacityReservation.ID))
+		log.FromContext(ctx).WithValues("instanceType", *instanceType.InstanceType, "capacityReservation", capacityReservation.ID, "offering", offering).V(0).Info("offering for capacity reservation and instanceType")
+		offerings = append(offerings, offering)
+		instanceTypeOfferingAvailable.With(prometheus.Labels{
+			instanceTypeLabel: fmt.Sprintf("%s-%s", *instanceType.InstanceType, "capacity-reservation"),
+			capacityTypeLabel: capacityType,
+			zoneLabel:         zone,
+		}).Set(float64(lo.Ternary(available, 1, 0)))
+		instanceTypeOfferingPriceEstimate.With(prometheus.Labels{
+			instanceTypeLabel: fmt.Sprintf("%s-%s", *instanceType.InstanceType, "capacity-reservation"),
+			capacityTypeLabel: capacityType,
+			zoneLabel:         zone,
+		}).Set(price)
+	}
+
+	log.FromContext(ctx).WithValues("offerings", offerings, "capacityReservations", capacityReservations).V(0).Info("createOfferings")
 	return offerings
 }
 

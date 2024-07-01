@@ -64,6 +64,19 @@ var (
 			zoneLabel,
 		},
 	)
+	instanceTypeOfferingAvailableCapacityReservation = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: metrics.Namespace,
+			Subsystem: cloudProviderSubsystem,
+			Name:      "instance_type_offering_available_capacity_reservation",
+			Help:      "Instance type offering availability, based on capacity reservation, instance type, capacity type, and zone",
+		},
+		[]string{
+			instanceTypeLabel,
+			capacityTypeLabel,
+			zoneLabel,
+		},
+	)
 	instanceTypeOfferingPriceEstimate = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: metrics.Namespace,

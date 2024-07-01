@@ -26,15 +26,16 @@ import (
 )
 
 const (
-	subnetSelectorTermsPath        = "subnetSelectorTerms"
-	securityGroupSelectorTermsPath = "securityGroupSelectorTerms"
-	amiSelectorTermsPath           = "amiSelectorTerms"
-	amiFamilyPath                  = "amiFamily"
-	tagsPath                       = "tags"
-	metadataOptionsPath            = "metadataOptions"
-	blockDeviceMappingsPath        = "blockDeviceMappings"
-	rolePath                       = "role"
-	instanceProfilePath            = "instanceProfile"
+	subnetSelectorTermsPath              = "subnetSelectorTerms"
+	securityGroupSelectorTermsPath       = "securityGroupSelectorTerms"
+	amiSelectorTermsPath                 = "amiSelectorTerms"
+	amiFamilyPath                        = "amiFamily"
+	tagsPath                             = "tags"
+	metadataOptionsPath                  = "metadataOptions"
+	blockDeviceMappingsPath              = "blockDeviceMappings"
+	rolePath                             = "role"
+	instanceProfilePath                  = "instanceProfile"
+	capacityReservationSelectorTermsPath = "capacityReservationSelectorTerms"
 )
 
 var (
@@ -81,6 +82,7 @@ func (in *EC2NodeClassSpec) validate(_ context.Context) (errs *apis.FieldError) 
 		in.validateAMIFamily().ViaField(amiFamilyPath),
 		in.validateBlockDeviceMappings().ViaField(blockDeviceMappingsPath),
 		in.validateTags().ViaField(tagsPath),
+		in.validateCapacityReservationSelectorTerms().ViaField(capacityReservationSelectorTermsPath),
 	)
 }
 
@@ -123,6 +125,27 @@ func (in *SecurityGroupSelectorTerm) validate() (errs *apis.FieldError) {
 		errs = errs.Also(apis.ErrGeneric(`"id" is mutually exclusive, cannot be set with a combination of other fields in`))
 	} else if in.Name != "" && (len(in.Tags) > 0 || in.ID != "") {
 		errs = errs.Also(apis.ErrGeneric(`"name" is mutually exclusive, cannot be set with a combination of other fields in`))
+	}
+	return errs
+}
+
+func (in *EC2NodeClassSpec) validateCapacityReservationSelectorTerms() (errs *apis.FieldError) {
+	if len(in.CapacityReservationSelectorTerms) == 0 {
+		errs = errs.Also(apis.ErrMissingOneOf())
+	}
+	for _, term := range in.CapacityReservationSelectorTerms {
+		errs = errs.Also(term.validate())
+	}
+	return errs
+}
+
+//nolint:gocyclo
+func (in *CapacityReservationSelectorTerm) validate() (errs *apis.FieldError) {
+	errs = errs.Also(validateTags(in.Tags).ViaField("tags"))
+	if len(in.Tags) == 0 && in.ID == "" && in.InstanceType == "" && in.Type == "" && in.OwnerID == "" {
+		errs = errs.Also(apis.ErrGeneric("expect at least one, got none", "tags", "id", "name", "instanceType", "type", "ownerId"))
+	} else if in.ID != "" && (len(in.Tags) > 0 || in.InstanceType != "" || in.Type != "" || in.OwnerID != "") {
+		errs = errs.Also(apis.ErrGeneric(`"id" is mutually exclusive, cannot be set with a combination of other fields in`))
 	}
 	return errs
 }

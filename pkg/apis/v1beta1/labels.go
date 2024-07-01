@@ -27,6 +27,7 @@ import (
 func init() {
 	v1beta1.RestrictedLabelDomains = v1beta1.RestrictedLabelDomains.Insert(RestrictedLabelDomains...)
 	v1beta1.WellKnownLabels = v1beta1.WellKnownLabels.Insert(
+		LabelCapactiyReservationID,
 		LabelInstanceHypervisor,
 		LabelInstanceEncryptionInTransitSupported,
 		LabelInstanceCategory,
@@ -119,6 +120,7 @@ var (
 	AnnotationEC2NodeClassHash                = Group + "/ec2nodeclass-hash"
 	AnnotationEC2NodeClassHashVersion         = Group + "/ec2nodeclass-hash-version"
 	AnnotationInstanceTagged                  = Group + "/tagged"
+	LabelCapactiyReservationID                = Group + "/capacity-reservation-id"
 
 	TagNodeClaim             = v1beta1.Group + "/nodeclaim"
 	TagManagedLaunchTemplate = Group + "/cluster"

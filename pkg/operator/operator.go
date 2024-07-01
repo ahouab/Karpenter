@@ -54,6 +54,7 @@ import (
 	awscache "github.com/aws/karpenter-provider-aws/pkg/cache"
 	"github.com/aws/karpenter-provider-aws/pkg/operator/options"
 	"github.com/aws/karpenter-provider-aws/pkg/providers/amifamily"
+	"github.com/aws/karpenter-provider-aws/pkg/providers/capacityreservation"
 	"github.com/aws/karpenter-provider-aws/pkg/providers/instance"
 	"github.com/aws/karpenter-provider-aws/pkg/providers/instanceprofile"
 	"github.com/aws/karpenter-provider-aws/pkg/providers/instancetype"
@@ -73,19 +74,20 @@ func init() {
 type Operator struct {
 	*operator.Operator
 
-	Session                   *session.Session
-	UnavailableOfferingsCache *awscache.UnavailableOfferings
-	EC2API                    ec2iface.EC2API
-	SubnetProvider            subnet.Provider
-	SecurityGroupProvider     securitygroup.Provider
-	InstanceProfileProvider   instanceprofile.Provider
-	AMIProvider               amifamily.Provider
-	AMIResolver               *amifamily.Resolver
-	LaunchTemplateProvider    launchtemplate.Provider
-	PricingProvider           pricing.Provider
-	VersionProvider           version.Provider
-	InstanceTypesProvider     instancetype.Provider
-	InstanceProvider          instance.Provider
+	Session                     *session.Session
+	UnavailableOfferingsCache   *awscache.UnavailableOfferings
+	EC2API                      ec2iface.EC2API
+	SubnetProvider              subnet.Provider
+	SecurityGroupProvider       securitygroup.Provider
+	InstanceProfileProvider     instanceprofile.Provider
+	AMIProvider                 amifamily.Provider
+	AMIResolver                 *amifamily.Resolver
+	LaunchTemplateProvider      launchtemplate.Provider
+	PricingProvider             pricing.Provider
+	VersionProvider             version.Provider
+	InstanceTypesProvider       instancetype.Provider
+	InstanceProvider            instance.Provider
+	CapacityReservationProvider capacityreservation.Provider
 }
 
 func NewOperator(ctx context.Context, operator *operator.Operator) (context.Context, *Operator) {
@@ -149,6 +151,7 @@ func NewOperator(ctx context.Context, operator *operator.Operator) (context.Cont
 	launchTemplateProvider := launchtemplate.NewDefaultProvider(
 		ctx,
 		cache.New(awscache.DefaultTTL, awscache.DefaultCleanupInterval),
+		cache.New(awscache.DefaultTTL, awscache.DefaultCleanupInterval),
 		ec2api,
 		eks.New(sess),
 		amiResolver,
@@ -176,22 +179,27 @@ func NewOperator(ctx context.Context, operator *operator.Operator) (context.Cont
 		subnetProvider,
 		launchTemplateProvider,
 	)
+	capacityReservationProvider := capacityreservation.NewDefaultProvider(
+		ec2api,
+		cache.New(awscache.DefaultTTL, awscache.DefaultCleanupInterval),
+	)
 
 	return ctx, &Operator{
-		Operator:                  operator,
-		Session:                   sess,
-		UnavailableOfferingsCache: unavailableOfferingsCache,
-		EC2API:                    ec2api,
-		SubnetProvider:            subnetProvider,
-		SecurityGroupProvider:     securityGroupProvider,
-		InstanceProfileProvider:   instanceProfileProvider,
-		AMIProvider:               amiProvider,
-		AMIResolver:               amiResolver,
-		VersionProvider:           versionProvider,
-		LaunchTemplateProvider:    launchTemplateProvider,
-		PricingProvider:           pricingProvider,
-		InstanceTypesProvider:     instanceTypeProvider,
-		InstanceProvider:          instanceProvider,
+		Operator:                    operator,
+		Session:                     sess,
+		UnavailableOfferingsCache:   unavailableOfferingsCache,
+		EC2API:                      ec2api,
+		SubnetProvider:              subnetProvider,
+		SecurityGroupProvider:       securityGroupProvider,
+		InstanceProfileProvider:     instanceProfileProvider,
+		AMIProvider:                 amiProvider,
+		AMIResolver:                 amiResolver,
+		VersionProvider:             versionProvider,
+		LaunchTemplateProvider:      launchTemplateProvider,
+		PricingProvider:             pricingProvider,
+		InstanceTypesProvider:       instanceTypeProvider,
+		InstanceProvider:            instanceProvider,
+		CapacityReservationProvider: capacityReservationProvider,
 	}
 }
 

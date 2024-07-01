@@ -23,6 +23,7 @@ import (
 	"github.com/imdario/mergo"
 	"github.com/samber/lo"
 	core "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	corev1beta1 "sigs.k8s.io/karpenter/pkg/apis/v1beta1"
@@ -65,14 +66,15 @@ type Options struct {
 // LaunchTemplate holds the dynamically generated launch template parameters
 type LaunchTemplate struct {
 	*Options
-	UserData            bootstrap.Bootstrapper
-	BlockDeviceMappings []*v1beta1.BlockDeviceMapping
-	MetadataOptions     *v1beta1.MetadataOptions
-	AMIID               string
-	InstanceTypes       []*cloudprovider.InstanceType `hash:"ignore"`
-	DetailedMonitoring  bool
-	EFACount            int
-	CapacityType        string
+	UserData              bootstrap.Bootstrapper
+	BlockDeviceMappings   []*v1beta1.BlockDeviceMapping
+	MetadataOptions       *v1beta1.MetadataOptions
+	AMIID                 string
+	InstanceTypes         []*cloudprovider.InstanceType `hash:"ignore"`
+	DetailedMonitoring    bool
+	EFACount              int
+	CapacityType          string
+	CapacityReservationID *string
 }
 
 // AMIFamily can be implemented to override the default logic for generating dynamic launch template parameters
@@ -149,8 +151,31 @@ func (r Resolver) Resolve(nodeClass *v1beta1.EC2NodeClass, nodeClaim *corev1beta
 				maxPods: int(instanceType.Capacity.Pods().Value()),
 			}
 		})
+		// tvonhacht: figure out if capacity-reservation is available
 		for params, instanceTypes := range paramsToInstanceTypes {
-			resolved, err := r.resolveLaunchTemplate(nodeClass, nodeClaim, instanceTypes, capacityType, amiFamily, amiID, params.maxPods, params.efaCount, options)
+			if r.isCapacityReservationLaunch(nodeClaim, instanceTypes) {
+				requirements := scheduling.NewNodeSelectorRequirementsWithMinValues(nodeClaim.Spec.Requirements...)
+				for _, instanceType := range instanceTypes {
+					for _, offering := range instanceType.Offerings {
+						requirements[corev1beta1.CapacityTypeLabelKey] = scheduling.NewRequirement(corev1beta1.CapacityTypeLabelKey, v1.NodeSelectorOpIn, corev1beta1.CapacityTypeOnDemand)
+						requirements[v1beta1.LabelCapactiyReservationID] = scheduling.NewRequirement(v1beta1.LabelCapactiyReservationID, v1.NodeSelectorOpExists)
+						if requirements.Compatible(offering.Requirements, scheduling.AllowUndefinedWellKnownLabels) != nil {
+							continue
+						}
+
+						capacityReservationID := offering.Requirements.Get(v1beta1.LabelCapactiyReservationID).Values()[0]
+
+						resolved, err := r.resolveLaunchTemplate(nodeClass, nodeClaim, instanceTypes, capacityType, amiFamily, amiID, params.maxPods, params.efaCount, &capacityReservationID, options)
+						if err != nil {
+							return nil, err
+						}
+						resolvedTemplates = append(resolvedTemplates, resolved)
+					}
+				}
+				continue
+			}
+
+			resolved, err := r.resolveLaunchTemplate(nodeClass, nodeClaim, instanceTypes, capacityType, amiFamily, amiID, params.maxPods, params.efaCount, nil, options)
 			if err != nil {
 				return nil, err
 			}
@@ -158,6 +183,28 @@ func (r Resolver) Resolve(nodeClass *v1beta1.EC2NodeClass, nodeClaim *corev1beta
 		}
 	}
 	return resolvedTemplates, nil
+}
+
+func (r Resolver) isCapacityReservationLaunch(nodeClaim *corev1beta1.NodeClaim, instanceTypes []*cloudprovider.InstanceType) bool {
+	requirements := scheduling.NewNodeSelectorRequirementsWithMinValues(nodeClaim.Spec.Requirements...)
+	// requirements must allow on-demand
+	if !requirements.Get(corev1beta1.CapacityTypeLabelKey).Has(corev1beta1.CapacityTypeOnDemand) {
+		return false
+	}
+
+	requirements[corev1beta1.CapacityTypeLabelKey] = scheduling.NewRequirement(corev1beta1.CapacityTypeLabelKey, v1.NodeSelectorOpIn, corev1beta1.CapacityTypeOnDemand)
+	requirements[v1beta1.LabelCapactiyReservationID] = scheduling.NewRequirement(v1beta1.LabelCapactiyReservationID, v1.NodeSelectorOpExists)
+	for _, instanceType := range instanceTypes {
+		for _, offering := range instanceType.Offerings {
+			if requirements.Compatible(offering.Requirements, scheduling.AllowUndefinedWellKnownLabels) == nil {
+				if offering.Requirements.Has(v1beta1.LabelCapactiyReservationID) {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 func GetAMIFamily(amiFamily *string, options *Options) AMIFamily {
@@ -206,7 +253,7 @@ func (r Resolver) defaultClusterDNS(opts *Options, kubeletConfig *corev1beta1.Ku
 }
 
 func (r Resolver) resolveLaunchTemplate(nodeClass *v1beta1.EC2NodeClass, nodeClaim *corev1beta1.NodeClaim, instanceTypes []*cloudprovider.InstanceType, capacityType string,
-	amiFamily AMIFamily, amiID string, maxPods int, efaCount int, options *Options) (*LaunchTemplate, error) {
+	amiFamily AMIFamily, amiID string, maxPods int, efaCount int, capacityReservationID *string, options *Options) (*LaunchTemplate, error) {
 	kubeletConfig := &corev1beta1.KubeletConfiguration{}
 	if nodeClaim.Spec.Kubelet != nil {
 		if err := mergo.Merge(kubeletConfig, nodeClaim.Spec.Kubelet); err != nil {
@@ -227,13 +274,14 @@ func (r Resolver) resolveLaunchTemplate(nodeClass *v1beta1.EC2NodeClass, nodeCla
 			nodeClass.Spec.UserData,
 			options.InstanceStorePolicy,
 		),
-		BlockDeviceMappings: nodeClass.Spec.BlockDeviceMappings,
-		MetadataOptions:     nodeClass.Spec.MetadataOptions,
-		DetailedMonitoring:  aws.BoolValue(nodeClass.Spec.DetailedMonitoring),
-		AMIID:               amiID,
-		InstanceTypes:       instanceTypes,
-		EFACount:            efaCount,
-		CapacityType:        capacityType,
+		BlockDeviceMappings:   nodeClass.Spec.BlockDeviceMappings,
+		MetadataOptions:       nodeClass.Spec.MetadataOptions,
+		DetailedMonitoring:    aws.BoolValue(nodeClass.Spec.DetailedMonitoring),
+		AMIID:                 amiID,
+		InstanceTypes:         instanceTypes,
+		EFACount:              efaCount,
+		CapacityType:          capacityType,
+		CapacityReservationID: capacityReservationID,
 	}
 	if len(resolved.BlockDeviceMappings) == 0 {
 		resolved.BlockDeviceMappings = amiFamily.DefaultBlockDeviceMappings()
