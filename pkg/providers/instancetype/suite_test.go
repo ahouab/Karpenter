@@ -168,7 +168,9 @@ var _ = Describe("InstanceTypeProvider", func() {
 		})
 		windowsNodeClass = test.EC2NodeClass(v1.EC2NodeClass{
 			Spec: v1.EC2NodeClassSpec{
-				AMIFamily: &v1.AMIFamilyWindows2022,
+				AMISelectorTerms: []v1.AMISelectorTerm{{
+					Alias: "windows2022@latest",
+				}},
 			},
 			Status: v1.EC2NodeClassStatus{
 				InstanceProfile: "test-profile",
@@ -621,7 +623,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 		Expect(supportsPodENI()).To(Equal(true))
 	})
 	It("should launch vpc.amazonaws.com/PrivateIPv4Address on a compatible instance type", func() {
-		nodeClass.Spec.AMIFamily = &v1.AMIFamilyWindows2022
+		nodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{{Alias: "windows2022@latest"}}
 		ExpectApplied(ctx, env.Client, nodePool, nodeClass)
 		pod := coretest.UnschedulablePod(coretest.PodOptions{
 			ResourceRequirements: corev1.ResourceRequirements{
@@ -682,7 +684,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 				Values:   []string{"test"},
 			},
 		})
-		nodeClass.Spec.AMIFamily = &v1.AMIFamilyWindows2022
+		nodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{{Alias: "windows2022@latest"}}
 		ExpectApplied(ctx, env.Client, nodePool, nodeClass)
 		pod := coretest.UnschedulablePod(coretest.PodOptions{
 			ResourceRequirements: corev1.ResourceRequirements{
@@ -941,7 +943,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 		Expect(err).To(BeNil())
 		nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{}
 		for _, info := range instanceInfo.InstanceTypes {
-			amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+			amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 			it := instancetype.NewInstanceType(ctx,
 				info,
 				fake.DefaultRegion,
@@ -964,7 +966,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 		Expect(err).To(BeNil())
 		nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{}
 		for _, info := range instanceInfo.InstanceTypes {
-			amiFamily := amifamily.GetAMIFamily(windowsNodeClass.Spec.AMIFamily, &amifamily.Options{})
+			amiFamily := amifamily.GetAMIFamily(lo.ToPtr(windowsNodeClass.AMIFamily()), &amifamily.Options{})
 			it := instancetype.NewInstanceType(ctx,
 				info,
 				fake.DefaultRegion,
@@ -1083,7 +1085,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 		})
 		Context("System Reserved Resources", func() {
 			It("should use defaults when no kubelet is specified", func() {
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{}
 				it := instancetype.NewInstanceType(ctx,
 					info,
@@ -1111,7 +1113,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 						string(corev1.ResourceEphemeralStorage): "10Gi",
 					},
 				}
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1133,8 +1135,8 @@ var _ = Describe("InstanceTypeProvider", func() {
 		})
 		Context("Kube Reserved Resources", func() {
 			It("should use defaults when no kubelet is specified", func() {
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{}
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1166,7 +1168,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 						string(corev1.ResourceEphemeralStorage): "2Gi",
 					},
 				}
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1205,7 +1207,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 							instancetype.MemoryAvailable: "500Mi",
 						},
 					}
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1234,7 +1236,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 							instancetype.MemoryAvailable: "10%",
 						},
 					}
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1263,7 +1265,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 							instancetype.MemoryAvailable: "100%",
 						},
 					}
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1292,7 +1294,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 							instancetype.MemoryAvailable: "50Mi",
 						},
 					}
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1323,7 +1325,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 							instancetype.MemoryAvailable: "500Mi",
 						},
 					}
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1355,7 +1357,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 							instancetype.MemoryAvailable: "10%",
 						},
 					}
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1384,7 +1386,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 							instancetype.MemoryAvailable: "100%",
 						},
 					}
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1402,7 +1404,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 					Expect(it.Overhead.EvictionThreshold.Memory().String()).To(Equal("0"))
 				})
 				It("should ignore eviction threshold when using Bottlerocket AMI", func() {
-					nodeClass.Spec.AMIFamily = &v1.AMIFamilyBottlerocket
+					nodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{{Alias: "bottlerocket@latest"}}
 					nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{
 						SystemReserved: map[string]string{
 							string(corev1.ResourceMemory): "20Gi",
@@ -1417,7 +1419,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 							instancetype.MemoryAvailable: "10Gi",
 						},
 					}
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1436,8 +1438,8 @@ var _ = Describe("InstanceTypeProvider", func() {
 				})
 			})
 			It("should take the default eviction threshold when none is specified", func() {
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{}
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1471,7 +1473,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 						instancetype.MemoryAvailable: "1Gi",
 					},
 				}
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1503,7 +1505,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 						instancetype.MemoryAvailable: "5%",
 					},
 				}
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1535,7 +1537,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 						instancetype.MemoryAvailable: "1Gi",
 					},
 				}
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1559,7 +1561,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 			nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{}
 			for _, info := range instanceInfo.InstanceTypes {
 				if *info.InstanceType == "t3.large" {
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1577,7 +1579,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 					Expect(it.Capacity.Pods().Value()).To(BeNumerically("==", 35))
 				}
 				if *info.InstanceType == "m6idn.32xlarge" {
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1603,7 +1605,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 				MaxPods: lo.ToPtr(int32(10)),
 			}
 			for _, info := range instanceInfo.InstanceTypes {
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1628,7 +1630,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 				MaxPods: lo.ToPtr(int32(10)),
 			}
 			for _, info := range instanceInfo.InstanceTypes {
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1657,7 +1659,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 				return *info.InstanceType == "t3.large"
 			})
 			Expect(ok).To(Equal(true))
-			amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+			amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 			nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{}
 			it := instancetype.NewInstanceType(ctx,
 				t3Large,
@@ -1692,7 +1694,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 				return *info.InstanceType == "t3.large"
 			})
 			Expect(ok).To(Equal(true))
-			amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+			amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 			nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{}
 			it := instancetype.NewInstanceType(ctx,
 				t3Large,
@@ -1724,7 +1726,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 				PodsPerCore: lo.ToPtr(int32(1)),
 			}
 			for _, info := range instanceInfo.InstanceTypes {
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1750,7 +1752,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 				MaxPods:     lo.ToPtr(int32(20)),
 			}
 			for _, info := range instanceInfo.InstanceTypes {
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1771,12 +1773,12 @@ var _ = Describe("InstanceTypeProvider", func() {
 		It("should ignore pods-per-core when using Bottlerocket AMI", func() {
 			instanceInfo, err := awsEnv.EC2API.DescribeInstanceTypesWithContext(ctx, &ec2.DescribeInstanceTypesInput{})
 			Expect(err).To(BeNil())
-			nodeClass.Spec.AMIFamily = &v1.AMIFamilyBottlerocket
+			nodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{{Alias: "bottlerocket@latest"}}
 			nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{
 				PodsPerCore: lo.ToPtr(int32(1)),
 			}
 			for _, info := range instanceInfo.InstanceTypes {
-				amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+				amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 				it := instancetype.NewInstanceType(ctx,
 					info,
 					fake.DefaultRegion,
@@ -1803,7 +1805,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 			}
 			for _, info := range instanceInfo.InstanceTypes {
 				if *info.InstanceType == "t3.large" {
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -1821,7 +1823,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 					Expect(it.Capacity.Pods().Value()).To(BeNumerically("==", 35))
 				}
 				if *info.InstanceType == "m6idn.32xlarge" {
-					amiFamily := amifamily.GetAMIFamily(nodeClass.Spec.AMIFamily, &amifamily.Options{})
+					amiFamily := amifamily.GetAMIFamily(lo.ToPtr(nodeClass.AMIFamily()), &amifamily.Options{})
 					it := instancetype.NewInstanceType(ctx,
 						info,
 						fake.DefaultRegion,
@@ -2216,7 +2218,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 	})
 	Context("Ephemeral Storage", func() {
 		BeforeEach(func() {
-			nodeClass.Spec.AMIFamily = aws.String(v1.AMIFamilyAL2)
+			nodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{{Alias: "al2@latest"}}
 			nodeClass.Spec.BlockDeviceMappings = []*v1.BlockDeviceMapping{
 				{
 					DeviceName: aws.String("/dev/xvda"),
@@ -2227,7 +2229,6 @@ var _ = Describe("InstanceTypeProvider", func() {
 			}
 		})
 		It("should default to EBS defaults when volumeSize is not defined in blockDeviceMappings for custom AMIs", func() {
-			nodeClass.Spec.AMIFamily = aws.String(v1.AMIFamilyCustom)
 			nodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{
 				{
 					Tags: map[string]string{
@@ -2261,7 +2262,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 			})
 		})
 		It("should default to EBS defaults when volumeSize is not defined in blockDeviceMappings for AL2023 Root volume", func() {
-			nodeClass.Spec.AMIFamily = aws.String(v1.AMIFamilyAL2023)
+			nodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{{Alias: "al2023@latest"}}
 			awsEnv.LaunchTemplateProvider.CABundle = lo.ToPtr("Y2EtYnVuZGxlCg==")
 			awsEnv.LaunchTemplateProvider.ClusterCIDR.Store(lo.ToPtr("10.100.0.0/16"))
 			ExpectApplied(ctx, env.Client, nodePool, nodeClass)
@@ -2277,7 +2278,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 			})
 		})
 		It("should default to EBS defaults when volumeSize is not defined in blockDeviceMappings for Bottlerocket Root volume", func() {
-			nodeClass.Spec.AMIFamily = aws.String(v1.AMIFamilyBottlerocket)
+			nodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{{Alias: "bottlerocket@latest"}}
 			nodeClass.Spec.BlockDeviceMappings[0].DeviceName = aws.String("/dev/xvdb")
 			ExpectApplied(ctx, env.Client, nodePool, nodeClass)
 			pod := coretest.UnschedulablePod()
@@ -2289,21 +2290,6 @@ var _ = Describe("InstanceTypeProvider", func() {
 				Expect(awsEnv.EC2API.CreateFleetBehavior.CalledWithInput.Len()).To(Equal(1))
 				Expect(ltInput.LaunchTemplateData.BlockDeviceMappings).To(HaveLen(1))
 				Expect(*ltInput.LaunchTemplateData.BlockDeviceMappings[0].DeviceName).To(Equal("/dev/xvdb"))
-				Expect(*ltInput.LaunchTemplateData.BlockDeviceMappings[0].Ebs.SnapshotId).To(Equal("snap-xxxxxxxx"))
-			})
-		})
-		It("should default to EBS defaults when volumeSize is not defined in blockDeviceMappings for Ubuntu Root volume", func() {
-			nodeClass.Spec.AMIFamily = aws.String(v1.AMIFamilyUbuntu)
-			nodeClass.Spec.BlockDeviceMappings[0].DeviceName = aws.String("/dev/sda1")
-			ExpectApplied(ctx, env.Client, nodePool, nodeClass)
-			pod := coretest.UnschedulablePod()
-			ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, pod)
-			node := ExpectScheduled(ctx, env.Client, pod)
-			Expect(*node.Status.Capacity.StorageEphemeral()).To(Equal(resource.MustParse("20Gi")))
-			Expect(awsEnv.EC2API.CalledWithCreateLaunchTemplateInput.Len()).To(BeNumerically(">=", 1))
-			awsEnv.EC2API.CalledWithCreateLaunchTemplateInput.ForEach(func(ltInput *ec2.CreateLaunchTemplateInput) {
-				Expect(ltInput.LaunchTemplateData.BlockDeviceMappings).To(HaveLen(1))
-				Expect(*ltInput.LaunchTemplateData.BlockDeviceMappings[0].DeviceName).To(Equal("/dev/sda1"))
 				Expect(*ltInput.LaunchTemplateData.BlockDeviceMappings[0].Ebs.SnapshotId).To(Equal("snap-xxxxxxxx"))
 			})
 		})
@@ -2400,7 +2386,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 		It("changes to nodeclass fields should result in a different set of instances types", func() {
 			// We should expect these nodeclass fields to change the result of the instance type
 			// nodeClass.instanceStorePolicy
-			// nodeClass.amiFamily
+			// nodeClass.amiSelectorTerms (alias)
 			// nodeClass.blockDeviceMapping.rootVolume
 			// nodeClass.blockDeviceMapping.volumeSize
 			// nodeClass.blockDeviceMapping.deviceName
@@ -2414,7 +2400,13 @@ var _ = Describe("InstanceTypeProvider", func() {
 			nodeClassChanges := []*v1.EC2NodeClass{
 				{}, // Testing the base case black EC2NodeClass
 				{Spec: v1.EC2NodeClassSpec{InstanceStorePolicy: lo.ToPtr(v1.InstanceStorePolicyRAID0)}},
-				{Spec: v1.EC2NodeClassSpec{AMIFamily: &v1.AMIFamilyUbuntu}},
+				{
+					Spec: v1.EC2NodeClassSpec{
+						AMISelectorTerms: []v1.AMISelectorTerm{{
+							Alias: "bottlerocket@latest",
+						}},
+					},
+				},
 				{
 					Spec: v1.EC2NodeClassSpec{BlockDeviceMappings: []*v1.BlockDeviceMapping{
 						{

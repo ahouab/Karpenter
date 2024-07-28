@@ -16,7 +16,13 @@ package hash_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+
+	"github.com/samber/lo"
+	"sigs.k8s.io/karpenter/pkg/apis/v1beta1"
+
+	"github.com/aws/karpenter-provider-aws/pkg/utils"
 
 	"sigs.k8s.io/karpenter/pkg/test/v1alpha1"
 
@@ -75,6 +81,7 @@ var _ = AfterEach(func() {
 
 var _ = Describe("NodeClass Hash Controller", func() {
 	var nodeClass *v1.EC2NodeClass
+	var nodePool *karpv1.NodePool
 	BeforeEach(func() {
 		nodeClass = test.EC2NodeClass(v1.EC2NodeClass{
 			Spec: v1.EC2NodeClassSpec{
@@ -91,6 +98,19 @@ var _ = Describe("NodeClass Hash Controller", func() {
 				AMISelectorTerms: []v1.AMISelectorTerm{
 					{
 						Tags: map[string]string{"*": "*"},
+					},
+				},
+			},
+		})
+		nodePool = coretest.NodePool(karpv1.NodePool{
+			Spec: karpv1.NodePoolSpec{
+				Template: karpv1.NodeClaimTemplate{
+					Spec: karpv1.NodeClaimSpec{
+						NodeClassRef: &karpv1.NodeClassReference{
+							Group: object.GVK(nodeClass).Group,
+							Kind:  object.GVK(nodeClass).Kind,
+							Name:  nodeClass.Name,
+						},
 					},
 				},
 			},
@@ -115,7 +135,6 @@ var _ = Describe("NodeClass Hash Controller", func() {
 		Expect(expectedHash).ToNot(Equal(expectedHashTwo))
 
 	},
-		Entry("AMIFamily Drift", &v1.EC2NodeClass{Spec: v1.EC2NodeClassSpec{AMIFamily: aws.String(v1.AMIFamilyBottlerocket)}}),
 		Entry("UserData Drift", &v1.EC2NodeClass{Spec: v1.EC2NodeClassSpec{UserData: aws.String("userdata-test-2")}}),
 		Entry("Tags Drift", &v1.EC2NodeClass{Spec: v1.EC2NodeClassSpec{Tags: map[string]string{"keyTag-test-3": "valueTag-test-3"}}}),
 		Entry("BlockDeviceMappings Drift", &v1.EC2NodeClass{Spec: v1.EC2NodeClassSpec{BlockDeviceMappings: []*v1.BlockDeviceMapping{{DeviceName: aws.String("map-device-test-3")}}}}),
@@ -123,6 +142,113 @@ var _ = Describe("NodeClass Hash Controller", func() {
 		Entry("MetadataOptions Drift", &v1.EC2NodeClass{Spec: v1.EC2NodeClassSpec{MetadataOptions: &v1.MetadataOptions{HTTPEndpoint: aws.String("disabled")}}}),
 		Entry("Context Drift", &v1.EC2NodeClass{Spec: v1.EC2NodeClassSpec{Context: aws.String("context-2")}}),
 	)
+	It("should update nodeClaim annotation kubelet hash if nodePool was configured using v1beta1 NodePool", func() {
+		kubeletConfig := &v1beta1.KubeletConfiguration{
+			ClusterDNS:  []string{"test-cluster-dns"},
+			MaxPods:     lo.ToPtr(int32(9383)),
+			PodsPerCore: lo.ToPtr(int32(9334283)),
+		}
+		kubeletConfigString, _ := json.Marshal(kubeletConfig)
+		nodePool.Annotations = lo.Assign(nodePool.Annotations, map[string]string{
+			karpv1.KubeletCompatibilityAnnotationKey: string(kubeletConfigString),
+		})
+		nodeClaim := coretest.NodeClaim(karpv1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{karpv1.NodePoolLabelKey: nodePool.Name},
+				Annotations: map[string]string{
+					v1.AnnotationEC2NodeClassHash:         "123456",
+					v1.AnnotationEC2NodeClassHashVersion:  "test",
+					v1.AnnotationKubeletCompatibilityHash: "123456",
+				},
+			},
+			Spec: karpv1.NodeClaimSpec{
+				NodeClassRef: &karpv1.NodeClassReference{
+					Group: object.GVK(nodeClass).Group,
+					Kind:  object.GVK(nodeClass).Kind,
+					Name:  nodeClass.Name,
+				},
+			},
+		})
+		ExpectApplied(ctx, env.Client, nodeClass, nodeClaim, nodePool)
+		expectedHash, _ := utils.GetHashKubelet(nodePool, nodeClass)
+
+		ExpectObjectReconciled(ctx, env.Client, hashController, nodeClass)
+		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+		Expect(nodeClaim.Annotations[v1.AnnotationKubeletCompatibilityHash]).To(Equal(expectedHash))
+	})
+	It("should update nodeClaim annotation kubelet hash when kubelet is configured using ec2nodeClass", func() {
+		nodeClaim := coretest.NodeClaim(karpv1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{karpv1.NodePoolLabelKey: nodePool.Name},
+				Annotations: map[string]string{
+					v1.AnnotationEC2NodeClassHash:         "123456",
+					v1.AnnotationEC2NodeClassHashVersion:  "test",
+					v1.AnnotationKubeletCompatibilityHash: "123456",
+				},
+			},
+			Spec: karpv1.NodeClaimSpec{
+				NodeClassRef: &karpv1.NodeClassReference{
+					Group: object.GVK(nodeClass).Group,
+					Kind:  object.GVK(nodeClass).Kind,
+					Name:  nodeClass.Name,
+				},
+			},
+		})
+		nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{
+			ClusterDNS:  []string{"test-cluster-dns"},
+			MaxPods:     lo.ToPtr(int32(9383)),
+			PodsPerCore: lo.ToPtr(int32(9334283)),
+		}
+		ExpectApplied(ctx, env.Client, nodeClass, nodeClaim, nodePool)
+		expectedHash, _ := utils.GetHashKubelet(nodePool, nodeClass)
+
+		ExpectObjectReconciled(ctx, env.Client, hashController, nodeClass)
+		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+		Expect(nodeClaim.Annotations[v1.AnnotationKubeletCompatibilityHash]).To(Equal(expectedHash))
+	})
+	It("should not update nodeClaim annotation kubelet hash if annotation is same as kubelet configuration on nodeClass", func() {
+		kubeletConfig := &v1beta1.KubeletConfiguration{
+			ClusterDNS:  []string{"test-cluster-dns"},
+			MaxPods:     lo.ToPtr(int32(9383)),
+			PodsPerCore: lo.ToPtr(int32(9334283)),
+		}
+		kubeletConfigString, _ := json.Marshal(kubeletConfig)
+		nodePool.Annotations = lo.Assign(nodePool.Annotations, map[string]string{
+			karpv1.KubeletCompatibilityAnnotationKey: string(kubeletConfigString),
+		})
+		nodeClaim := coretest.NodeClaim(karpv1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{karpv1.NodePoolLabelKey: nodePool.Name},
+				Annotations: map[string]string{
+					v1.AnnotationEC2NodeClassHash:        "123456",
+					v1.AnnotationEC2NodeClassHashVersion: "test",
+				},
+			},
+			Spec: karpv1.NodeClaimSpec{
+				NodeClassRef: &karpv1.NodeClassReference{
+					Group: object.GVK(nodeClass).Group,
+					Kind:  object.GVK(nodeClass).Kind,
+					Name:  nodeClass.Name,
+				},
+			},
+		})
+		ExpectApplied(ctx, env.Client, nodeClass, nodeClaim, nodePool)
+
+		ExpectObjectReconciled(ctx, env.Client, hashController, nodeClass)
+		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+		hashBefore := nodeClaim.Annotations[v1.AnnotationKubeletCompatibilityHash]
+
+		nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{
+			ClusterDNS:  []string{"test-cluster-dns"},
+			MaxPods:     lo.ToPtr(int32(9383)),
+			PodsPerCore: lo.ToPtr(int32(9334283)),
+		}
+		nodePool.Annotations = nil
+		ExpectApplied(ctx, env.Client, nodeClass, nodePool)
+		ExpectObjectReconciled(ctx, env.Client, hashController, nodeClass)
+		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+		Expect(nodeClaim.Annotations[v1.AnnotationKubeletCompatibilityHash]).To(Equal(hashBefore))
+	})
 	It("should not update the drift hash when dynamic field is updated", func() {
 		ExpectApplied(ctx, env.Client, nodeClass)
 		ExpectObjectReconciled(ctx, env.Client, hashController, nodeClass)
@@ -174,6 +300,7 @@ var _ = Describe("NodeClass Hash Controller", func() {
 		}
 		nodeClaimOne := coretest.NodeClaim(karpv1.NodeClaim{
 			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{karpv1.NodePoolLabelKey: nodePool.Name},
 				Annotations: map[string]string{
 					v1.AnnotationEC2NodeClassHash:        "123456",
 					v1.AnnotationEC2NodeClassHashVersion: "test",
@@ -189,6 +316,7 @@ var _ = Describe("NodeClass Hash Controller", func() {
 		})
 		nodeClaimTwo := coretest.NodeClaim(karpv1.NodeClaim{
 			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{karpv1.NodePoolLabelKey: nodePool.Name},
 				Annotations: map[string]string{
 					v1.AnnotationEC2NodeClassHash:        "123456",
 					v1.AnnotationEC2NodeClassHashVersion: "test",
@@ -203,7 +331,7 @@ var _ = Describe("NodeClass Hash Controller", func() {
 			},
 		})
 
-		ExpectApplied(ctx, env.Client, nodeClass, nodeClaimOne, nodeClaimTwo)
+		ExpectApplied(ctx, env.Client, nodeClass, nodeClaimOne, nodeClaimTwo, nodePool)
 
 		ExpectObjectReconciled(ctx, env.Client, hashController, nodeClass)
 		nodeClass = ExpectExists(ctx, env.Client, nodeClass)
@@ -224,6 +352,7 @@ var _ = Describe("NodeClass Hash Controller", func() {
 		}
 		nodeClaim := coretest.NodeClaim(karpv1.NodeClaim{
 			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{karpv1.NodePoolLabelKey: nodePool.Name},
 				Annotations: map[string]string{
 					v1.AnnotationEC2NodeClassHash:        "1234564654",
 					v1.AnnotationEC2NodeClassHashVersion: v1.EC2NodeClassHashVersion,
@@ -237,7 +366,7 @@ var _ = Describe("NodeClass Hash Controller", func() {
 				},
 			},
 		})
-		ExpectApplied(ctx, env.Client, nodeClass, nodeClaim)
+		ExpectApplied(ctx, env.Client, nodeClass, nodeClaim, nodePool)
 
 		ExpectObjectReconciled(ctx, env.Client, hashController, nodeClass)
 		nodeClass = ExpectExists(ctx, env.Client, nodeClass)
@@ -259,6 +388,7 @@ var _ = Describe("NodeClass Hash Controller", func() {
 		}
 		nodeClaim := coretest.NodeClaim(karpv1.NodeClaim{
 			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{karpv1.NodePoolLabelKey: nodePool.Name},
 				Annotations: map[string]string{
 					v1.AnnotationEC2NodeClassHash:        "123456",
 					v1.AnnotationEC2NodeClassHashVersion: "test",
@@ -273,7 +403,7 @@ var _ = Describe("NodeClass Hash Controller", func() {
 			},
 		})
 		nodeClaim.StatusConditions().SetTrue(karpv1.ConditionTypeDrifted)
-		ExpectApplied(ctx, env.Client, nodeClass, nodeClaim)
+		ExpectApplied(ctx, env.Client, nodeClass, nodeClaim, nodePool)
 
 		ExpectObjectReconciled(ctx, env.Client, hashController, nodeClass)
 		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
@@ -281,5 +411,33 @@ var _ = Describe("NodeClass Hash Controller", func() {
 		// Expect ec2nodeclass-hash on the NodeClaims to stay the same
 		Expect(nodeClaim.Annotations).To(HaveKeyWithValue(v1.AnnotationEC2NodeClassHash, "123456"))
 		Expect(nodeClaim.Annotations).To(HaveKeyWithValue(v1.AnnotationEC2NodeClassHashVersion, v1.EC2NodeClassHashVersion))
+	})
+	It("should update nodeClaim annotation kubelet hash when using a standalone nodeClaim", func() {
+		nodeClaim := coretest.NodeClaim(karpv1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{
+					v1.AnnotationEC2NodeClassHash:        "123456",
+					v1.AnnotationEC2NodeClassHashVersion: "test",
+				},
+			},
+			Spec: karpv1.NodeClaimSpec{
+				NodeClassRef: &karpv1.NodeClassReference{
+					Group: object.GVK(nodeClass).Group,
+					Kind:  object.GVK(nodeClass).Kind,
+					Name:  nodeClass.Name,
+				},
+			},
+		})
+		nodeClass.Spec.Kubelet = &v1.KubeletConfiguration{
+			ClusterDNS:  []string{"test-cluster-dns"},
+			MaxPods:     lo.ToPtr(int32(9383)),
+			PodsPerCore: lo.ToPtr(int32(9334283)),
+		}
+		ExpectApplied(ctx, env.Client, nodeClass, nodeClaim, nodePool)
+		expectedHash, _ := utils.GetHashKubelet(nil, nodeClass)
+
+		ExpectObjectReconciled(ctx, env.Client, hashController, nodeClass)
+		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+		Expect(nodeClaim.Annotations[v1.AnnotationKubeletCompatibilityHash]).To(Equal(expectedHash))
 	})
 })

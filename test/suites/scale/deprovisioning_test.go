@@ -253,10 +253,10 @@ var _ = Describe("Deprovisioning", Label(debug.NoWatch), Label(debug.NoEvents), 
 			nodePoolMap[consolidationValue].Spec.Disruption.ConsolidateAfter = nil
 			nodePoolMap[emptinessValue].Spec.Disruption.ConsolidationPolicy = karpv1.ConsolidationPolicyWhenEmpty
 			nodePoolMap[emptinessValue].Spec.Disruption.ConsolidateAfter.Duration = lo.ToPtr(time.Duration(0))
-			nodePoolMap[expirationValue].Spec.Disruption.ExpireAfter.Duration = lo.ToPtr(time.Duration(0))
+			nodePoolMap[expirationValue].Spec.Template.Spec.ExpireAfter.Duration = lo.ToPtr(time.Duration(0))
 			nodePoolMap[expirationValue].Spec.Limits = disableProvisioningLimits
 			// Update the drift NodeClass to start drift on Nodes assigned to this NodeClass
-			driftNodeClass.Spec.AMIFamily = &v1.AMIFamilyBottlerocket
+			driftNodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{{Alias: "bottlerocket@latest"}}
 
 			// Create test assertions to ensure during the multiple deprovisioner scale-downs
 			type testAssertions struct {
@@ -617,13 +617,13 @@ var _ = Describe("Deprovisioning", Label(debug.NoWatch), Label(debug.NoEvents), 
 				// Change limits so that replacement nodes will use another nodePool.
 				nodePool.Spec.Limits = disableProvisioningLimits
 				// Enable Expiration
-				nodePool.Spec.Disruption.ExpireAfter.Duration = lo.ToPtr(time.Duration(0))
+				nodePool.Spec.Template.Spec.ExpireAfter.Duration = lo.ToPtr(time.Duration(0))
 
 				noExpireNodePool := test.NodePool(*nodePool.DeepCopy())
 
 				// Disable Expiration
 				noExpireNodePool.Spec.Disruption.ConsolidateAfter = &karpv1.NillableDuration{}
-				noExpireNodePool.Spec.Disruption.ExpireAfter.Duration = nil
+				noExpireNodePool.Spec.Template.Spec.ExpireAfter.Duration = nil
 
 				noExpireNodePool.ObjectMeta = metav1.ObjectMeta{Name: test.RandomName()}
 				noExpireNodePool.Spec.Limits = nil
@@ -678,7 +678,7 @@ var _ = Describe("Deprovisioning", Label(debug.NoWatch), Label(debug.NoEvents), 
 
 			env.MeasureDeprovisioningDurationFor(func() {
 				By("kicking off deprovisioning drift by changing the nodeClass AMIFamily")
-				nodeClass.Spec.AMIFamily = &v1.AMIFamilyBottlerocket
+				nodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{{Alias: "bottlerocket@latest"}}
 				env.ExpectCreatedOrUpdated(nodeClass)
 
 				env.EventuallyExpectDeletedNodeCount("==", expectedNodeCount)
