@@ -279,6 +279,21 @@ func (env *Environment) EventuallyExpectHealthy(pods ...*corev1.Pod) {
 	env.EventuallyExpectHealthyWithTimeout(-1, pods...)
 }
 
+func (env *Environment) EventuallyExpectTerminating(pods ...*corev1.Pod) {
+	GinkgoHelper()
+	env.EventuallyExpectTerminatingWithTimeout(-1, pods...)
+}
+
+func (env *Environment) EventuallyExpectTerminatingWithTimeout(timeout time.Duration, pods ...*corev1.Pod) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		for _, pod := range pods {
+			g.Expect(env.Client.Get(env, client.ObjectKeyFromObject(pod), pod)).To(Succeed())
+			g.Expect(pod.DeletionTimestamp.IsZero()).To(BeFalse())
+		}
+	}).WithTimeout(timeout).Should(Succeed())
+}
+
 func (env *Environment) EventuallyExpectHealthyWithTimeout(timeout time.Duration, pods ...*corev1.Pod) {
 	GinkgoHelper()
 	Eventually(func(g Gomega) {
@@ -290,7 +305,17 @@ func (env *Environment) EventuallyExpectHealthyWithTimeout(timeout time.Duration
 			)))
 		}
 	}).WithTimeout(timeout).Should(Succeed())
+}
 
+func (env *Environment) ConsistentlyExpectTerminatingPods(duration time.Duration, pods ...*corev1.Pod) {
+	GinkgoHelper()
+	By(fmt.Sprintf("expecting %d pods to be terminating for %s", len(pods), duration))
+	Consistently(func(g Gomega) {
+		for _, pod := range pods {
+			g.Expect(env.Client.Get(env, client.ObjectKeyFromObject(pod), pod)).To(Succeed())
+			g.Expect(pod.DeletionTimestamp.IsZero()).To(BeFalse())
+		}
+	}, duration.String()).Should(Succeed())
 }
 
 func (env *Environment) ConsistentlyExpectHealthyPods(duration time.Duration, pods ...*corev1.Pod) {
@@ -479,20 +504,22 @@ func (env *Environment) ExpectCreatedNodeCount(comparator string, count int) []*
 	return createdNodes
 }
 
-func (env *Environment) ExpectNodeCount(comparator string, count int) {
+func (env *Environment) ExpectNodeCount(comparator string, count int) []*corev1.Node {
 	GinkgoHelper()
 
 	nodeList := &corev1.NodeList{}
 	Expect(env.Client.List(env, nodeList, client.HasLabels{test.DiscoveryLabel})).To(Succeed())
 	Expect(len(nodeList.Items)).To(BeNumerically(comparator, count))
+	return lo.ToSlicePtr(nodeList.Items)
 }
 
-func (env *Environment) ExpectNodeClaimCount(comparator string, count int) {
+func (env *Environment) ExpectNodeClaimCount(comparator string, count int) []*karpv1.NodeClaim {
 	GinkgoHelper()
 
 	nodeClaimList := &karpv1.NodeClaimList{}
 	Expect(env.Client.List(env, nodeClaimList, client.HasLabels{test.DiscoveryLabel})).To(Succeed())
 	Expect(len(nodeClaimList.Items)).To(BeNumerically(comparator, count))
+	return lo.ToSlicePtr(nodeClaimList.Items)
 }
 
 func NodeClaimNames(nodeClaims []*karpv1.NodeClaim) []string {

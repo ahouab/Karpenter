@@ -7,7 +7,7 @@ description: >
   Inspect Karpenter Metrics
 ---
 <!-- this document is generated from hack/docs/metrics_gen_docs.go -->
-Karpenter makes several metrics available in Prometheus format to allow monitoring cluster provisioning status. These metrics are available by default at `karpenter.karpenter.svc.cluster.local:8000/metrics` configurable via the `METRICS_PORT` environment variable documented [here](../settings)
+Karpenter makes several metrics available in Prometheus format to allow monitoring cluster provisioning status. These metrics are available by default at `karpenter.karpenter.svc.cluster.local:8080/metrics` configurable via the `METRICS_PORT` environment variable documented [here](../settings)
 ### `karpenter_build_info`
 A metric with a constant '1' value labeled by version from which karpenter was built.
 - Stability Level: STABLE
@@ -37,11 +37,11 @@ Number of nodeclaims created in total by Karpenter. Labeled by reason the nodecl
 ## Nodes Metrics
 
 ### `karpenter_nodes_total_pod_requests`
-Node total pod requests are the resources requested by non-DaemonSet pods bound to nodes.
+Node total pod requests are the resources requested by pods bound to nodes, including the DaemonSet pods.
 - Stability Level: BETA
 
 ### `karpenter_nodes_total_pod_limits`
-Node total pod limits are the resources specified by non-DaemonSet pod limits.
+Node total pod limits are the resources specified by pod limits, including the DaemonSet pods.
 - Stability Level: BETA
 
 ### `karpenter_nodes_total_daemon_requests`

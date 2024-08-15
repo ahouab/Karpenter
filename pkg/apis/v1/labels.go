@@ -122,10 +122,12 @@ var (
 	LabelInstanceAcceleratorCount             = apis.Group + "/instance-accelerator-count"
 	AnnotationEC2NodeClassHash                = apis.Group + "/ec2nodeclass-hash"
 	AnnotationKubeletCompatibilityHash        = apis.CompatibilityGroup + "/kubelet-drift-hash"
+	AnnotationClusterNameTaggedCompatability  = apis.CompatibilityGroup + "/cluster-name-tagged"
 	AnnotationEC2NodeClassHashVersion         = apis.Group + "/ec2nodeclass-hash-version"
 	AnnotationInstanceTagged                  = apis.Group + "/tagged"
 
 	AnnotationUbuntuCompatibilityKey                 = apis.CompatibilityGroup + "/v1beta1-ubuntu"
+	AnnotationUbuntuCompatibilityIncompatible        = "incompatible"
 	AnnotationUbuntuCompatibilityAMIFamily           = "amiFamily"
 	AnnotationUbuntuCompatibilityBlockDeviceMappings = "blockDeviceMappings"
 
